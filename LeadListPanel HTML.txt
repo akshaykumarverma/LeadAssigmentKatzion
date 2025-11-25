@@ -1,0 +1,100 @@
+<template>
+    <lightning-card title="Lead Management & Sync" icon-name="standard:lead">
+        <div class="slds-m-around_medium">
+
+            <!-- Filters Row -->
+            <div class="slds-grid slds-gutters slds-m-bottom_small">
+                <!-- Search by Name -->
+                <div class="slds-col">
+                    <lightning-input
+                        type="search"
+                        label="Search by Name"
+                        value={searchKey}
+                        onchange={handleSearchChange}>
+                    </lightning-input>
+                </div>
+
+                <!-- Lead Source Filter -->
+                <div class="slds-col">
+                    <lightning-combobox
+                        label="Lead Source"
+                        value={selectedLeadSource}
+                        placeholder="All"
+                        options={leadSourceOptions}
+                        onchange={handleLeadSourceChange}>
+                    </lightning-combobox>
+                </div>
+
+                <!-- Page Size Selector -->
+                <div class="slds-col">
+                    <lightning-combobox
+                        label="Page Size"
+                        value={pageSizeString}
+                        options={pageSizeOptions}
+                        onchange={handlePageSizeChange}>
+                    </lightning-combobox>
+                </div>
+            </div>
+
+            <!-- Data Table with Leads -->
+            <template if:true={hasLeads}>
+                <lightning-datatable
+                    key-field="leadId"
+                    data={leads}
+                    columns={columns}
+                    selected-rows={selectedLeadIds}
+                    onrowselection={handleRowSelection}>
+                </lightning-datatable>
+            </template>
+
+            <!-- No data message -->
+            <template if:false={hasLeads}>
+                <div class="slds-m-vertical_medium slds-align_absolute-center">
+                    <p>No leads found.</p>
+                </div>
+            </template>
+
+            <!-- Paginator -->
+            <div class="slds-grid slds-grid_align-spread slds-m-top_small">
+                <div>
+                    <p>
+                        Page {pageNumber} of {totalPages}
+                        &nbsp;|&nbsp; Total Records: {totalRecords}
+                    </p>
+                </div>
+                <div>
+                    <lightning-button-group>
+                        <lightning-button
+                            label="Previous"
+                            onclick={handlePrevious}
+                            disabled={isPreviousDisabled}>
+                        </lightning-button>
+                        <lightning-button
+                            label="Next"
+                            onclick={handleNext}
+                            disabled={isNextDisabled}>
+                        </lightning-button>
+                    </lightning-button-group>
+                </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="slds-m-top_medium slds-text-align_right">
+                <lightning-button
+                    variant="brand"
+                    label="Sync Contacts to Org B"
+                    onclick={handleSync}
+                    disabled={isSyncDisabled}>
+                </lightning-button>
+            </div>
+
+            <!-- Simple loading spinner -->
+            <template if:true={isLoading}>
+                <div class="spinner-overlay">
+                    <lightning-spinner alternative-text="Loading" size="small"></lightning-spinner>
+                </div>
+            </template>
+
+        </div>
+    </lightning-card>
+</template>

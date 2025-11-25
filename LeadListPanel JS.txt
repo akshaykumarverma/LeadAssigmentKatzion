@@ -1,0 +1,284 @@
+import { LightningElement, track } from 'lwc';
+import getLeads from '@salesforce/apex/LeadListController.getLeads';
+import getLeadSources from '@salesforce/apex/LeadListController.getLeadSources';
+import startContactsSync from '@salesforce/apex/LeadListController.startContactsSync';
+import { ShowToastEvent } from 'lightning/platformShowToastEvent';
+
+export default class LeadListPanel extends LightningElement {
+    // ========== Reactive State ==========
+
+    @track leads = [];            // List of leads for current page
+    @track totalRecords = 0;      // Total number of matching leads
+    @track pageNumber = 1;        // Current page (1-based)
+    @track pageSize = 20;         // Current page size
+
+    @track selectedLeadIds = [];  // Selected Ids ON CURRENT PAGE ONLY (for datatable)
+
+    // Global selection across ALL pages
+    selectedLeadIdsSet = new Set(); // <== new
+
+    searchKey = '';               // Search text (FirstName/LastName)
+    selectedLeadSource = '';      // Filter by LeadSource ('' = All)
+    @track leadSourceOptions = []; // Combobox options for LeadSource
+
+    @track isLoading = false;     // Controls spinner overlay
+
+    // ========== Datatable Column Definition ==========
+
+    columns = [
+        { label: 'Name', fieldName: 'name', type: 'text' },
+        { label: 'Company', fieldName: 'company', type: 'text' },
+        { label: 'Email', fieldName: 'email', type: 'email' },
+        { label: 'Lead Source', fieldName: 'leadSource', type: 'text' }
+    ];
+
+    // ========== Getters for UI ==========
+
+    get pageSizeString() {
+        return String(this.pageSize);
+    }
+
+    pageSizeOptions = [
+        { label: '10', value: '10' },
+        { label: '20', value: '20' },
+        { label: '50', value: '50' }
+    ];
+
+    get hasLeads() {
+        return Array.isArray(this.leads) && this.leads.length > 0;
+    }
+
+    get totalPages() {
+        if (!this.totalRecords || !this.pageSize) {
+            return 1;
+        }
+        return Math.ceil(this.totalRecords / this.pageSize);
+    }
+
+    get isPreviousDisabled() {
+        return this.pageNumber <= 1;
+    }
+
+    get isNextDisabled() {
+        return this.pageNumber >= this.totalPages;
+    }
+
+    // Disable sync button when nothing selected ANYWHERE
+    get isSyncDisabled() {
+        return !this.selectedLeadIdsSet || this.selectedLeadIdsSet.size === 0;
+    }
+
+    // ========== Lifecycle ==========
+
+    connectedCallback() {
+        this.loadLeadSources();
+        this.fetchLeads();
+    }
+
+    // ========== Server Calls ==========
+
+    loadLeadSources() {
+        getLeadSources()
+            .then(data => {
+                const options = [{ label: 'All', value: '' }];
+
+                if (data && Array.isArray(data)) {
+                    data.forEach(source => {
+                        options.push({ label: source, value: source });
+                    });
+                }
+
+                this.leadSourceOptions = options;
+            })
+            .catch(error => {
+                this.showToast(
+                    'Error loading Lead Sources',
+                    this.extractErrorMessage(error),
+                    'error'
+                );
+            });
+    }
+
+    /**
+     * Fetch paginated Lead list from Apex based on search/filter/page info.
+     * Also re-applies selection for rows of this page based on the global set.
+     */
+    fetchLeads() {
+        this.isLoading = true;
+
+        getLeads({
+            searchKey: this.searchKey,
+            leadSourceFilter: this.selectedLeadSource,
+            pageSize: this.pageSize,
+            pageNumber: this.pageNumber
+        })
+            .then(result => {
+                this.leads = result && result.leads ? result.leads : [];
+                this.totalRecords = result && result.totalRecords ? result.totalRecords : 0;
+
+                // ---- IMPORTANT: restore selection on CURRENT page ----
+                const pageIds = new Set(this.leads.map(l => l.leadId));
+                const pageSelected = [];
+
+                this.selectedLeadIdsSet.forEach(id => {
+                    if (pageIds.has(id)) {
+                        pageSelected.push(id);
+                    }
+                });
+
+                this.selectedLeadIds = pageSelected;
+            })
+            .catch(error => {
+                this.leads = [];
+                this.totalRecords = 0;
+                this.selectedLeadIds = [];
+                this.showToast(
+                    'Error loading Leads',
+                    this.extractErrorMessage(error),
+                    'error'
+                );
+            })
+            .finally(() => {
+                this.isLoading = false;
+            });
+    }
+
+    // ========== Filter / Pagination Handlers ==========
+
+    handleSearchChange(event) {
+        this.searchKey = event.target.value;
+        this.pageNumber = 1;
+
+        // Optional: clear selection when filter changes
+        this.selectedLeadIdsSet = new Set();
+        this.selectedLeadIds = [];
+
+        this.fetchLeads();
+    }
+
+    handleLeadSourceChange(event) {
+        this.selectedLeadSource = event.detail.value;
+        this.pageNumber = 1;
+
+        // Optional: clear selection when filter changes
+        this.selectedLeadIdsSet = new Set();
+        this.selectedLeadIds = [];
+
+        this.fetchLeads();
+    }
+
+    handlePageSizeChange(event) {
+        const value = event.detail.value;
+        this.pageSize = parseInt(value, 10);
+        this.pageNumber = 1;
+        this.fetchLeads();
+    }
+
+    handlePrevious() {
+        if (this.pageNumber > 1) {
+            this.pageNumber = this.pageNumber - 1;
+            this.fetchLeads();
+        }
+    }
+
+    handleNext() {
+        if (this.pageNumber < this.totalPages) {
+            this.pageNumber = this.pageNumber + 1;
+            this.fetchLeads();
+        }
+    }
+
+    // ========== Datatable Selection ==========
+
+    /**
+     * Keeps a GLOBAL selection set across pages.
+     * - event.detail.selectedRows contains only rows selected on THIS page.
+     * - We update the global Set for all rows on this page based on
+     *   which ones are currently selected.
+     */
+    handleRowSelection(event) {
+        const pageSelectedRows = event.detail.selectedRows || [];
+        const pageSelectedIds = new Set(pageSelectedRows.map(row => row.leadId));
+
+        // All row Ids on the current page
+        const pageIds = new Set(this.leads.map(l => l.leadId));
+
+        // Update global set: add checked, remove unchecked for THIS page
+        pageIds.forEach(id => {
+            if (pageSelectedIds.has(id)) {
+                this.selectedLeadIdsSet.add(id);
+            } else {
+                this.selectedLeadIdsSet.delete(id);
+            }
+        });
+
+        // For the datatable on this page, just use the page selection
+        this.selectedLeadIds = Array.from(pageSelectedIds);
+    }
+
+    // ========== Sync Action ==========
+
+    handleSync() {
+        const idsToSync = Array.from(this.selectedLeadIdsSet);
+
+        if (!idsToSync || idsToSync.length === 0) {
+            this.showToast(
+                'No Leads Selected',
+                'Please select at least one Lead to sync.',
+                'warning'
+            );
+            return;
+        }
+
+        this.isLoading = true;
+
+        startContactsSync({ leadIds: idsToSync })
+            .then(() => {
+                this.showToast(
+                    'Sync Started',
+                    'Contacts sync to Org B has been started and will run in background.',
+                    'success'
+                );
+            })
+            .catch(error => {
+                this.showToast(
+                    'Error starting sync',
+                    this.extractErrorMessage(error),
+                    'error'
+                );
+            })
+            .finally(() => {
+                this.isLoading = false;
+            });
+    }
+
+    // ========== Helper Methods ==========
+
+    extractErrorMessage(error) {
+        if (!error) {
+            return 'Unknown error';
+        }
+
+        if (Array.isArray(error.body)) {
+            return error.body.map(e => e.message).join(', ');
+        }
+        if (error.body && typeof error.body.message === 'string') {
+            return error.body.message;
+        }
+        if (typeof error.message === 'string') {
+            return error.message;
+        }
+
+        return 'Unknown error';
+    }
+
+    showToast(title, message, variant) {
+        this.dispatchEvent(
+            new ShowToastEvent({
+                title,
+                message,
+                variant
+            })
+        );
+    }
+}
